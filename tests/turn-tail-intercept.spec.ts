@@ -12,7 +12,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { createSidebarStore } from '../src/client/state.ts'
-import { registerTurnTailInterception } from '../src/client/intercept.tsx'
+import { registerTurnTailInterception, selectTurnTail } from '../src/client/intercept.tsx'
 import type { Context } from '../src/context-types.ts'
 
 interface RegisteredSlot {
@@ -99,7 +99,9 @@ describe('turn-tail interception registration (issue #15)', () => {
     expect(options.name).toBe('conversation.chat.turnTail')
     expect(options.priority).toBe(-1)
     expect(options.registrant).toBe('dsh-better-sidebar')
-    expect(options.select).toBeTypeOf('function')
+    // List-slot contract (DSH >= 0.1.6-alpha.2): an `id`, no chain `select`.
+    expect(options.id).toBe('dsh-better-sidebar-produced-files')
+    expect(options.select).toBeUndefined()
     expect(options.inject).toBeTypeOf('function')
     expect(component).toBeTypeOf('function')
 
@@ -146,9 +148,15 @@ describe('turn-tail interception registration (issue #15)', () => {
     const fake = fakeSlots(true)
     const store = createSidebarStore()
     const restore = registerTurnTailInterception(clientCtx(fake.slots), store)
-    const select = fake.registered[0]!.options.select as (owner: unknown) => unknown
+    // The routing decision lives in the selector the entry component calls
+    // (list slots inject the owner props; there is no chain `select` option).
+    const select = selectTurnTail(store)
+    const component = fake.registered[0]!.component as (props: unknown) => unknown
 
-    // Enabled (default): a produced turn claims the chain; an empty one declines.
+    // Enabled (default): a produced turn claims the row; an empty one declines
+    // and the entry component then renders nothing.
+    expect(component(emptyOwner())).toBeNull()
+    expect(component(producedOwner(['a.ts']))).not.toBeNull()
     expect(select(producedOwner(['a.ts', 'b.ts']))).toEqual(['a.ts', 'b.ts'])
     expect(select(emptyOwner())).toBeNull()
     // The engine Turn data path (the real owner currency: { turn, seq,

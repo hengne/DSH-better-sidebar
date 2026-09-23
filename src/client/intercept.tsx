@@ -109,23 +109,43 @@ export function SidebarProducedFiles(props: {
  * disposes the entry and a later declaration re-registers it. This mirrors
  * @deepseek-ai/dsh-client-ui-deliverables' registration of the same slot.
  */
+/**
+ * Decide whether the sidebar takes over a Turn's produced-files row. Declines
+ * (null) while the editor tab type is disabled in the side card settings — the
+ * row then falls back to the default deliverables behavior instead of offering
+ * chips that cannot open — and while the sidebar is externally disabled
+ * (aionui-panel chosen).
+ */
+export function selectTurnTail(store: SidebarStore): (owner: unknown) => readonly string[] | null {
+  return (owner) => {
+    if (store.getSuspended()) return null
+    if (store.getPrefs().tabsEnabled['editor'] === false) return null
+    return selectProducedFiles(owner)
+  }
+}
+
 export function registerTurnTailInterception(ctx: Context, store: SidebarStore): () => void {
+  const select = selectTurnTail(store)
+  // `conversation.chat.turnTail` is a LIST slot since DSH 0.1.6-alpha.2 (it was
+  // a chain slot before): every entry needs an `id`, the host renders all
+  // entries and injects the owner props instead of a chain `matched`, so the
+  // routing decision moves into the entry component, which renders nothing
+  // when the selector declines. Registering with `select` and no `id` throws
+  // 'list slot "conversation.chat.turnTail" requires options.id' on 0.1.7 and
+  // the whole plugin client entry fails to activate.
+  const SidebarProducedFilesEntry = (props: { openInSidebar: (path: string) => void, onShowInFolder: (files: readonly string[]) => void }) => {
+    const matched = select(props)
+    if (matched === null) return null
+    return <SidebarProducedFiles {...props} matched={matched} />
+  }
   return ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register({
     name: 'conversation.chat.turnTail',
-    // Decline the takeover while the editor tab type is disabled in the side
-    // card settings: the produced-files row falls back to the default
-    // deliverables behavior instead of offering chips that cannot open. Also
-    // while the sidebar is externally disabled (aionui-panel chosen).
-    select: (owner) => {
-      if (store.getSuspended()) return null
-      if (store.getPrefs().tabsEnabled['editor'] === false) return null
-      return selectProducedFiles(owner)
-    },
+    id: 'dsh-better-sidebar-produced-files',
     priority: -1,
     registrant: 'dsh-better-sidebar',
     inject: (sessionId: string) => ({
       openInSidebar: (path: string) => { openSidebarFile(ctx, store, sessionId, path) },
       onShowInFolder: (files: readonly string[]) => { revealInExplorer(ctx, store, sessionId, files) },
     }),
-  }, SidebarProducedFiles))
+  }, SidebarProducedFilesEntry))
 }
