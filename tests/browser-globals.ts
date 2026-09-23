@@ -50,6 +50,11 @@ if (g.navigator === undefined) {
 
 if (g.window === undefined) {
   g.window = {
+    // dsh-client-ui-primitives >= 0.1.7 installs window-level pointer/keyboard
+    // listeners at module load (Tooltip's input-modality tracking); the stub
+    // must accept them like a real window does.
+    addEventListener: () => {},
+    removeEventListener: () => {},
     clearTimeout: () => {},
     setTimeout: (_fn: () => void) => 0,
     innerWidth: 1024,
