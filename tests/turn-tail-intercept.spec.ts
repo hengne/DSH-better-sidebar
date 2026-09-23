@@ -99,9 +99,7 @@ describe('turn-tail interception registration (issue #15)', () => {
     expect(options.name).toBe('conversation.chat.turnTail')
     expect(options.priority).toBe(-1)
     expect(options.registrant).toBe('dsh-better-sidebar')
-    // List-slot contract (DSH >= 0.1.6-alpha.2): an `id`, no chain `select`.
-    expect(options.id).toBe('dsh-better-sidebar-produced-files')
-    expect(options.select).toBeUndefined()
+    expect(options.select).toBeTypeOf('function')
     expect(options.inject).toBeTypeOf('function')
     expect(component).toBeTypeOf('function')
 
@@ -148,15 +146,12 @@ describe('turn-tail interception registration (issue #15)', () => {
     const fake = fakeSlots(true)
     const store = createSidebarStore()
     const restore = registerTurnTailInterception(clientCtx(fake.slots), store)
-    // The routing decision lives in the selector the entry component calls
-    // (list slots inject the owner props; there is no chain `select` option).
-    const select = selectTurnTail(store)
-    const component = fake.registered[0]!.component as (props: unknown) => unknown
+    const select = fake.registered[0]!.options.select as (owner: unknown) => unknown
+    // The registered selector is the exported policy, unit-testable on its own.
 
-    // Enabled (default): a produced turn claims the row; an empty one declines
-    // and the entry component then renders nothing.
-    expect(component(emptyOwner())).toBeNull()
-    expect(component(producedOwner(['a.ts']))).not.toBeNull()
+    expect(selectTurnTail(store)(producedOwner(['a.ts']))).toEqual(['a.ts'])
+
+    // Enabled (default): a produced turn claims the chain; an empty one declines.
     expect(select(producedOwner(['a.ts', 'b.ts']))).toEqual(['a.ts', 'b.ts'])
     expect(select(emptyOwner())).toBeNull()
     // The engine Turn data path (the real owner currency: { turn, seq,
@@ -172,6 +167,31 @@ describe('turn-tail interception registration (issue #15)', () => {
     expect(select(producedOwner(['a.ts']))).toBeNull()
 
     restore()
+  })
+
+  it('skips the takeover on list-slot hosts (DSH >= 0.1.6-alpha.2) instead of failing to activate', () => {
+    // A list-slot host refuses the chain shape at registration; the plugin must
+    // swallow exactly that refusal (the default row's chips already open in the
+    // sidebar through the extension-band tab types) and still hand back a
+    // working disposer.
+    const fake = fakeSlots(true)
+    const register = fake.slots.register
+    fake.slots.register = (options, component) => {
+      if (options.id === undefined) throw new Error('list slot "conversation.chat.turnTail" requires options.id')
+      return register(options, component)
+    }
+    const store = createSidebarStore()
+    const restore = registerTurnTailInterception(clientCtx(fake.slots), store)
+    expect(fake.registered).toHaveLength(0)
+    restore()
+    restore()
+    expect(fake.disposals).toHaveLength(0)
+  })
+
+  it('rethrows registration errors that are not the list-slot refusal', () => {
+    const fake = fakeSlots(true)
+    fake.slots.register = () => { throw new Error('not declared (a parent entry\'s children table must declare it)') }
+    expect(() => registerTurnTailInterception(clientCtx(fake.slots), createSidebarStore())).toThrow('not declared')
   })
 
   it('wires the openInSidebar and onShowInFolder seats', () => {

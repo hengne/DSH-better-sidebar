@@ -96,20 +96,6 @@ export function SidebarProducedFiles(props: {
 }
 
 /**
- * Register the turn-tail interception (returns the disposer).
- *
- * The slot is a CHILD slot the host's ui-conversation declares in its
- * `conversation.chat.node` children table (kind: chain, scope: session).
- * Registering it directly races the declaration — the ui-slots core's
- * load-time validation throws "not declared (a parent entry's children
- * table must declare it)" when the parent entry is not on the ledger yet.
- * slots.inject waits for the declaration: the callback runs synchronously
- * when the slot is already declared, otherwise it runs inside the declaring
- * register() call once the declaration commits; declaration collapse
- * disposes the entry and a later declaration re-registers it. This mirrors
- * @deepseek-ai/dsh-client-ui-deliverables' registration of the same slot.
- */
-/**
  * Decide whether the sidebar takes over a Turn's produced-files row. Declines
  * (null) while the editor tab type is disabled in the side card settings — the
  * row then falls back to the default deliverables behavior instead of offering
@@ -124,28 +110,61 @@ export function selectTurnTail(store: SidebarStore): (owner: unknown) => readonl
   }
 }
 
+/**
+ * Register the turn-tail interception (returns the disposer).
+ *
+ * The slot is a CHILD slot the host's ui-conversation declares in its
+ * `conversation.chat.node` children table. Registering it directly races the
+ * declaration — the ui-slots core's load-time validation throws "not declared
+ * (a parent entry's children table must declare it)" when the parent entry is
+ * not on the ledger yet. slots.inject waits for the declaration: the callback
+ * runs synchronously when the slot is already declared, otherwise it runs
+ * inside the declaring register() call once the declaration commits;
+ * declaration collapse disposes the entry and a later declaration re-registers
+ * it. This mirrors @deepseek-ai/dsh-client-ui-deliverables' registration of
+ * the same slot.
+ *
+ * Two host contracts exist for this slot:
+ *
+ * - Hosts up to DSH 0.1.6-alpha.1 declare it as a CHAIN slot: entries carry a
+ *   `select` and the lowest `priority` whose selector accepts the Turn takes
+ *   the whole tail over. This is where the sidebar replaces the default
+ *   produced-files row with chips that open in the sidebar.
+ * - DSH 0.1.6-alpha.2 and later declare it as a LIST slot: every entry needs
+ *   an `id`, there is no `select`, and the host renders EVERY entry, so a
+ *   second entry would sit under the default deliverables row and duplicate
+ *   its chips. Registering the chain shape there throws
+ *   'list slot "conversation.chat.turnTail" requires options.id'. On those
+ *   hosts the takeover is not needed: the host's own `openFile` funnel goes
+ *   through `sidebarRight.openResource`, and this plugin's `editor` / `files`
+ *   tab types are registered in the `extension` band, which takes over the
+ *   builtin kind's address claims — so the default row's chips already open
+ *   in the sidebar. The registration is therefore skipped on list-slot hosts
+ *   (the disposer is still returned so callers need no host detection).
+ */
 export function registerTurnTailInterception(ctx: Context, store: SidebarStore): () => void {
   const select = selectTurnTail(store)
-  // `conversation.chat.turnTail` is a LIST slot since DSH 0.1.6-alpha.2 (it was
-  // a chain slot before): every entry needs an `id`, the host renders all
-  // entries and injects the owner props instead of a chain `matched`, so the
-  // routing decision moves into the entry component, which renders nothing
-  // when the selector declines. Registering with `select` and no `id` throws
-  // 'list slot "conversation.chat.turnTail" requires options.id' on 0.1.7 and
-  // the whole plugin client entry fails to activate.
-  const SidebarProducedFilesEntry = (props: { openInSidebar: (path: string) => void, onShowInFolder: (files: readonly string[]) => void }) => {
-    const matched = select(props)
-    if (matched === null) return null
-    return <SidebarProducedFiles {...props} matched={matched} />
-  }
-  return ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register({
-    name: 'conversation.chat.turnTail',
-    id: 'dsh-better-sidebar-produced-files',
-    priority: -1,
-    registrant: 'dsh-better-sidebar',
-    inject: (sessionId: string) => ({
-      openInSidebar: (path: string) => { openSidebarFile(ctx, store, sessionId, path) },
-      onShowInFolder: (files: readonly string[]) => { revealInExplorer(ctx, store, sessionId, files) },
-    }),
-  }, SidebarProducedFilesEntry))
+  return ctx.slots.inject('conversation.chat.turnTail', () => {
+    try {
+      return ctx.slots.register({
+        name: 'conversation.chat.turnTail',
+        select,
+        priority: -1,
+        registrant: 'dsh-better-sidebar',
+        inject: (sessionId: string) => ({
+          openInSidebar: (path: string) => { openSidebarFile(ctx, store, sessionId, path) },
+          onShowInFolder: (files: readonly string[]) => { revealInExplorer(ctx, store, sessionId, files) },
+        }),
+      }, SidebarProducedFiles)
+    } catch (error) {
+      if (isListSlotContract(error)) return () => {}
+      throw error
+    }
+  })
+}
+
+/** Whether a registration error is the list-slot host refusing the chain shape. */
+function isListSlotContract(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes('requires options.id')
 }
